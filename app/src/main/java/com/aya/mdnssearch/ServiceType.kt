@@ -152,5 +152,4 @@ enum class ServiceType(val value: String) {
     XSERVERAID("_xserveraid._tcp"),
     XSYNC("_xsync._tcp"),
     XTSHAPRO("_xtshapro._tcp"),
-    BENQSHARE("_benqshare._tcp")
 }

@@ -1,8 +1,15 @@
 package com.aya.mdnssearch
 
+import android.app.AlertDialog
 import android.content.Context
 import android.net.nsd.NsdManager
 import android.net.nsd.NsdServiceInfo
+import android.util.Log
+import android.view.LayoutInflater
+import android.view.View
+import android.widget.Button
+import android.widget.TextView
+import android.widget.Toast
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import kotlinx.coroutines.CoroutineScope
@@ -14,11 +21,15 @@ import java.net.InetAddress
 
 class Mdns(context: Context) : ViewModel() {
 
+    val TAG = "Mdns"
     val nsdManager: NsdManager by lazy { context.applicationContext.getSystemService(Context.NSD_SERVICE) as NsdManager }
     val discoverList by lazy { mutableMapOf<String, Discover>() }
     val registerList by lazy { mutableMapOf<String, Register>() }
     val mdnsServiceListLiveData = MutableLiveData<List<NsdServiceInfo>>()
     private val mdnsServiceList = mutableListOf<NsdServiceInfo>()
+    val context = context
+
+    var dialog: AlertDialog? = null
 
     init {
         mdnsServiceListLiveData.value = mdnsServiceList
@@ -27,6 +38,7 @@ class Mdns(context: Context) : ViewModel() {
     fun updateMdnsServiceListLiveData() {
         CoroutineScope(Dispatchers.Main).launch {
             Timber.d("updateMdnsServiceListLiveData")
+//            mdnsServiceList.sortBy { it:NsdServiceInfo->it.host.hostAddress  }
             mdnsServiceListLiveData.value = mdnsServiceList
         }
     }
@@ -44,14 +56,25 @@ class Mdns(context: Context) : ViewModel() {
         Timber.e("service is null")
     }
 
+    @Deprecated("Need to specify service type")
     fun startDiscover() {
         // default discover services
         // notice FAILURE_MAX_LIMIT
         startDiscover(ServiceType.AIRPLAY.value)
         startDiscover(ServiceType.RAOP_TCP.value)
-        startDiscover(ServiceType.BENQSHARE.value)
-        startDiscover(ServiceType.MIRACAST.value)
-        startDiscover(ServiceType.HTTP.value)
+//        startDiscover(ServiceType.BENQSHARE.value)
+//        startDiscover(ServiceType.MIRACAST.value)
+//        startDiscover(ServiceType.HTTP.value)
+    }
+
+    fun startDiscover(serviceTypes: ArrayList<ServiceType>) {
+        for(s in serviceTypes) {
+            startDiscover(s)
+        }
+    }
+
+    fun startDiscover(serviceType: ServiceType) {
+        startDiscover(serviceType.value)
     }
 
     fun stopAllDiscover() {
@@ -61,7 +84,6 @@ class Mdns(context: Context) : ViewModel() {
         discoverList.clear()
         mdnsServiceList.clear()
         updateMdnsServiceListLiveData()
-
     }
 
     fun stopDiscover(service: String?) {
@@ -74,7 +96,11 @@ class Mdns(context: Context) : ViewModel() {
         port: Int = 8080,
         map: Map<String, String>? = null
     ) {
-
+        if(registerList.containsKey(serviceName)){
+            Toast.makeText(context,"already register",Toast.LENGTH_SHORT).show()
+            return
+        }
+        Log.d(TAG, "startRegister: $String")
         val register = Register()
         register.startRegister(serviceName, serviceType, host, port, map)
         registerList.put(serviceName, register)
@@ -84,6 +110,7 @@ class Mdns(context: Context) : ViewModel() {
         registerList.forEach {
             it.value.stopRegister()
         }
+        Log.d(TAG, "stopAllRegister: ")
         registerList.clear()
     }
 
@@ -96,8 +123,9 @@ class Mdns(context: Context) : ViewModel() {
         stopAllDiscover()
     }
 
-    fun restartMdns() {
-        stopMdns()
+    @Deprecated("not used now")
+    fun restartDiscover() {
+        stopAllDiscover()
         startDiscover()
     }
 
@@ -121,14 +149,18 @@ class Mdns(context: Context) : ViewModel() {
         }
     }
 
+    /**
+     * Find if there are same names in current list
+     * */
     private fun findServiceInfo(serviceInfo: NsdServiceInfo?):
             List<NsdServiceInfo>? {
+        //todo: need to refactor
         var filteredList = serviceInfo?.run {
             mdnsServiceList.filter {
                 it.serviceName == this.serviceName
                         && it.serviceType == this.serviceType
-                        && it.host == this.host
-                        && it.port == this.port
+//                        && it.host == this.host
+//                        && it.port == this.port
             }
         }
 
@@ -177,20 +209,22 @@ class Mdns(context: Context) : ViewModel() {
         }
 
         override fun onServiceFound(p0: NsdServiceInfo?) {
+            //Todo: not resolve right now
             p0?.let {
-//                Timber.d("onServiceFound Service Name: ${it.serviceName}, Type: ${it.serviceType}, Host: ${it.host}, Port: ${it.port}")
+                Timber.d("onServiceFound Service Name: ${it.serviceName}, Type: ${it.serviceType}, Host: ${it.host}, Port: ${it.port}")
                 // Resolve the service to get detailed information
-                resolveService(p0, true)
+                addMdnsService(it)
             }
         }
 
         override fun onServiceLost(p0: NsdServiceInfo?) {
             p0?.let {
-                resolveService(p0, false)
+                removeService(it)
             }
         }
 
         private fun resolveService(serviceInfo: NsdServiceInfo?, isFound: Boolean) {
+            //Todo: not resolve right now
             nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
                 override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo?) {
                     // Called when the service is successfully resolved.
@@ -247,7 +281,11 @@ class Mdns(context: Context) : ViewModel() {
         }
 
         fun stopRegister() {
-            nsdManager.unregisterService(this)
+            try {
+                nsdManager.unregisterService(this)
+            } catch (e: IllegalArgumentException) {
+                Timber.e(e)
+            }
         }
 
         override fun onRegistrationFailed(p0: NsdServiceInfo?, p1: Int) {
@@ -269,6 +307,55 @@ class Mdns(context: Context) : ViewModel() {
                 Timber.d("onServiceUnregistered Service Name: ${it.serviceName}, Type: ${it.serviceType}, Host: ${it.host}, Port: ${it.port}")
             }
         }
+    }
+
+    fun resolveService(context: Context, serviceInfo: NsdServiceInfo?) {
+        nsdManager.resolveService(serviceInfo, object : NsdManager.ResolveListener {
+            override fun onServiceResolved(resolvedServiceInfo: NsdServiceInfo?) {
+                // Called when the service is successfully resolved.
+                resolvedServiceInfo?.let {
+                    Timber.d("onServiceResolved Service Name: ${it.serviceName}, Type: ${it.serviceType}, Host: ${it.host}, Port: ${it.port}")
+                    createDefaultDialog(context, it.serviceName, Utils.getAttributes(it))
+                }
+            }
+
+            override fun onResolveFailed(serviceInfo: NsdServiceInfo?, errorCode: Int) {
+                // Handle the retry logic here, if needed
+                Timber.e("resolveService onResolveFailed ...retry / Service Name: ${serviceInfo?.serviceName}")
+                CoroutineScope(Dispatchers.IO).launch {
+                    delay(1000)
+                    resolveService(context, serviceInfo)
+                    Toast.makeText(
+                        context,
+                        "please refresh list and try again...",
+                        Toast.LENGTH_SHORT
+                    ).show()
+                }
+            }
+        })
+    }
+
+    fun createDefaultDialog(context: Context, serviceName: String?, content: String?) {
+        dialog?.apply {
+            this.dismiss()
+            dialog = null
+        }
+
+        //todo: need refactor
+        val builder = AlertDialog.Builder(context)
+        val view: View = LayoutInflater.from(context).inflate(R.layout.dialog, null)
+        val dialogTitle = view.findViewById<TextView>(R.id.dialogTitle)
+        val dialogTextView = view.findViewById<TextView>(R.id.dialogTextView)
+        val dialogButton = view.findViewById<Button>(R.id.dialogButton)
+
+        dialogTitle.text = serviceName
+        dialogTextView.text = content
+        dialogButton.setOnClickListener {
+            dialog?.dismiss()
+        }
+        builder.setView(view)
+        dialog = builder.create()
+        dialog?.show()
     }
 
 }
